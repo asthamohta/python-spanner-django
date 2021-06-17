@@ -6,7 +6,9 @@
 
 from django.db import NotSupportedError
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
-
+import django.db.models.options as options
+options.DEFAULT_NAMES = options.DEFAULT_NAMES + ('interleave', 'cascade')
+import pdb;
 
 class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
     """
@@ -26,6 +28,9 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
     )
     sql_create_unique = (
         "CREATE UNIQUE NULL_FILTERED INDEX %(name)s ON %(table)s (%(columns)s)"
+    )
+    sql_create_interleaved_table = (
+        "CREATE TABLE %(table)s (%(definition)s) PRIMARY KEY(%(primary_key)s), INTERLEAVE IN PARENT %(parent)s ON DELETE %(action)s"
     )
     sql_delete_unique = "DROP INDEX %(name)s"
 
@@ -101,16 +106,36 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             constraint.constraint_sql(model, self)
             for constraint in model._meta.constraints
         ]
-        # Make the table
-        sql = self.sql_create_table % {
-            "table": self.quote_name(model._meta.db_table),
-            "definition": ", ".join(
-                constraint
-                for constraint in (*column_sqls, *constraints)
-                if constraint
-            ),
-            "primary_key": self.quote_name(model._meta.pk.column),
-        }
+        
+        
+        if hasattr(model._meta, 'interleave'):
+            definition, extra_params = self.column_sql(model._meta.interleave, model._meta.interleave._meta.pk)
+            column_sqls.insert(
+                0, "%s %s" % (self.quote_name(model._meta.interleave._meta.pk.column), definition)
+            )
+            sql = self.sql_create_interleaved_table % {
+                "table": self.quote_name(model._meta.db_table),
+                "definition": ", ".join(
+                    constraint
+                    for constraint in (*column_sqls, *constraints)
+                    if constraint
+                ),
+                "primary_key": str(model._meta.interleave._meta.pk.column)+", "+self.quote_name(model._meta.pk.column),
+                "parent": model._meta.interleave.__name__,
+                "action": "CASCADE" if (hasattr(model._meta, 'cascade') and model._meta.cascade) else "NO ACTION",
+            }
+            #pdb.set_trace()
+        else:
+            sql = self.sql_create_table % {
+                "table": self.quote_name(model._meta.db_table),
+                "definition": ", ".join(
+                    constraint
+                    for constraint in (*column_sqls, *constraints)
+                    if constraint
+                ),
+                "primary_key": self.quote_name(model._meta.pk.column),
+            }
+        #pdb.set_trace()
         if model._meta.db_tablespace:
             tablespace_sql = self.connection.ops.tablespace_sql(
                 model._meta.db_tablespace
@@ -120,6 +145,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         # Prevent using [] as params, in the case a literal '%' is used in the
         # definition
         self.execute(sql, params or None)
+
 
         # Add any field index and index_together's (deferred as SQLite
         # _remake_table needs it)
@@ -140,6 +166,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
         """
         # Spanner requires dropping all of a table's indexes before dropping
         # the table.
+        #pdb.set_trace()
         index_names = self._constraint_names(
             model, index=True, primary_key=False
         )

@@ -9,12 +9,16 @@ Different models used by system tests in django-spanner code.
 """
 from django.db import models
 
-
+class Person(models.Model):
+    name = models.CharField(max_length=40)
+    user_id = models.IntegerField(primary_key=True)
+    
 class Author(models.Model):
     first_name = models.CharField(max_length=20)
     last_name = models.CharField(max_length=20)
     rating = models.DecimalField()
-
+    class Meta:
+        interleave = Person
 
 class Number(models.Model):
     num = models.DecimalField()
