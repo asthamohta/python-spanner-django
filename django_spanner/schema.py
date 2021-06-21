@@ -44,6 +44,14 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
 
     sql_delete_column = "ALTER TABLE %(table)s DROP COLUMN %(column)s"
 
+    def get_interleaved_hierarchy(self, model):
+        interleaved_models=[]
+        if hasattr(model._meta, 'interleave'):
+            interleaved_models = self.get_interleaved_hierarchy(model._meta.interleave)
+        interleaved_models.append(model)
+        return interleaved_models
+
+
     def create_model(self, model):
         """
         Create a table and any accompanying indexes or unique constraints for
@@ -107,12 +115,17 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
             for constraint in model._meta.constraints
         ]
         
-        
+        primary_key = self.quote_name(model._meta.pk.column)
         if hasattr(model._meta, 'interleave'):
-            definition, extra_params = self.column_sql(model._meta.interleave, model._meta.interleave._meta.pk)
-            column_sqls.insert(
-                0, "%s %s" % (self.quote_name(model._meta.interleave._meta.pk.column), definition)
-            )
+            interleaved_models = self.get_interleaved_hierarchy(model._meta.interleave)
+            for i_model in reversed(interleaved_models):
+                definition, extra_params = self.column_sql(i_model, i_model._meta.pk)
+                if(i_model._meta.pk.column == model._meta.pk.column):
+                    raise ValueError("Trying to interleave same named primary key pdb")
+                column_sqls.insert(
+                    0, "%s %s" % (self.quote_name(i_model._meta.pk.column), definition)
+                )
+                primary_key =str(i_model._meta.pk.column)+", "+primary_key
             sql = self.sql_create_interleaved_table % {
                 "table": self.quote_name(model._meta.db_table),
                 "definition": ", ".join(
@@ -120,11 +133,12 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                     for constraint in (*column_sqls, *constraints)
                     if constraint
                 ),
-                "primary_key": str(model._meta.interleave._meta.pk.column)+", "+self.quote_name(model._meta.pk.column),
+                "primary_key": primary_key,
                 "parent": model._meta.interleave.__name__,
                 "action": "CASCADE" if (hasattr(model._meta, 'cascade') and model._meta.cascade) else "NO ACTION",
             }
-            #pdb.set_trace()
+            # if str(model.__name__) == 'Author':
+            #     pdb.set_trace()
         else:
             sql = self.sql_create_table % {
                 "table": self.quote_name(model._meta.db_table),
@@ -133,7 +147,7 @@ class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):
                     for constraint in (*column_sqls, *constraints)
                     if constraint
                 ),
-                "primary_key": self.quote_name(model._meta.pk.column),
+                "primary_key": primary_key,
             }
         #pdb.set_trace()
         if model._meta.db_tablespace:
